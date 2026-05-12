@@ -30,11 +30,17 @@ try:
         LIST_EVENTS_SCHEMA,
         RECENT_EVENTS_SCHEMA,
     )
+    from .sinks import deliver_to_platform as _deliver_to_platform
+    from .sinks import post_webhook as _post_webhook
+    from .sinks import render_payload as _render_payload
 except ImportError:
     from schemas import (
         LIST_EVENTS_SCHEMA,
         RECENT_EVENTS_SCHEMA,
     )
+    from sinks import deliver_to_platform as _deliver_to_platform
+    from sinks import post_webhook as _post_webhook
+    from sinks import render_payload as _render_payload
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +416,15 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
             data[key] = str(data.get(key) or "{response}").replace("{response}", content)
             await _call_service(domain, service, data, response.get("target") or {})
             return
+        if sink_type == "delivery":
+            gateway_runner = getattr(self, "gateway_runner", None)
+            await _deliver_to_platform(
+                str(response.get("target") or ""),
+                content,
+                adapters=getattr(gateway_runner, "adapters", None),
+                loop=getattr(gateway_runner, "_gateway_loop", None),
+            )
+            return
         if sink_type == "webhook":
             url = str(response.get("url") or os.getenv(str(response.get("url_env") or "")) or "")
             if not url:
@@ -427,23 +442,6 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
         return {"name": "Home Assistant Events", "type": "channel", "url": self._hass_url}
 
 
-def _render_payload(value: Any, response: str) -> Any:
-    if isinstance(value, str):
-        return value.replace("{response}", response)
-    if isinstance(value, list):
-        return [_render_payload(item, response) for item in value]
-    if isinstance(value, dict):
-        return {key: _render_payload(val, response) for key, val in value.items()}
-    return value
-
-
-async def _post_webhook(url: str, payload: Any) -> None:
-    if not AIOHTTP_AVAILABLE:
-        raise RuntimeError("aiohttp is not installed")
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-        async with session.post(url, json=payload) as resp:
-            if resp.status >= 300:
-                raise RuntimeError(f"webhook HTTP {resp.status}: {(await resp.text())[:500]}")
 
 
 def validate_config(config: Any) -> bool:

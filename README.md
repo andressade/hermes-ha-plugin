@@ -5,8 +5,8 @@ Hermes Agent platform plugin for Home Assistant.
 It listens to Home Assistant WebSocket events, matches configured triggers, turns
 the matching event into a configured prompt, and lets Hermes Agent act on it.
 Agent output is configurable: ignore it, write it back to Home Assistant, call a
-safe Home Assistant service, or POST it to a webhook such as a Slack incoming
-webhook.
+safe Home Assistant service, or deliver it through Hermes' messaging layer
+such as Slack.
 
 ## Install
 
@@ -52,10 +52,8 @@ gateway:
               Check whether this looks suspicious. If needed, use HA tools.
               Send a short summary to Slack.
             response:
-              type: webhook
-              url_env: SLACK_HOME_WEBHOOK_URL
-              payload:
-                text: "{response}"
+              type: delivery
+              target: slack:#home-alerts
 ```
 
 By default each matched HA event gets its own Hermes session key so bursts do
@@ -67,7 +65,6 @@ Environment:
 ```bash
 export HASS_TOKEN="your-home-assistant-long-lived-token"
 export HASS_URL="http://homeassistant.local:8123"
-export SLACK_HOME_WEBHOOK_URL="https://hooks.slack.com/services/..."
 ```
 
 Restart the gateway after changing plugin/config:
@@ -140,12 +137,27 @@ response:
     message: "{response}"
 ```
 
-POST to webhook:
+Deliver through Hermes messaging platforms:
+
+```yaml
+response:
+  type: delivery
+  target: slack:#home-alerts
+```
+
+Use `target: slack` to send to the configured Slack home channel
+(`SLACK_HOME_CHANNEL`, plus `SLACK_HOME_THREAD_ID` when configured). The Slack
+platform must be enabled in Hermes with `SLACK_BOT_TOKEN`. Direct targets use
+Hermes delivery target strings, for example `slack:C0123456789`; channel names
+like `slack:#home-alerts` require Hermes channel-directory resolution, so channel
+IDs are the safest config value.
+
+POST to a generic webhook:
 
 ```yaml
 response:
   type: webhook
-  url_env: SLACK_HOME_WEBHOOK_URL
+  url: "https://example.invalid/hook"
   payload:
     text: "{response}"
 ```

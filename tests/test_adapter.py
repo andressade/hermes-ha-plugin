@@ -64,6 +64,10 @@ def install_gateway_stubs():
         async def handle_message(self, event):
             self.last_event = event
 
+        @staticmethod
+        def extract_media(content):
+            return [], content
+
     config_mod.Platform = Platform
     config_mod.PlatformConfig = PlatformConfig
     base_mod.BasePlatformAdapter = BasePlatformAdapter
@@ -91,6 +95,63 @@ adapter = load_adapter()
 
 
 class AdapterTest(unittest.TestCase):
+    def install_delivery_stubs(self, *, home=None, parse=None, resolve=None, send_error=None):
+        calls = []
+        module_names = ["tools.send_message_tool", "gateway.channel_directory"]
+        saved_modules = {name: sys.modules.get(name) for name in module_names}
+        saved_load_config = getattr(sys.modules["gateway.config"], "load_gateway_config", None)
+
+        def cleanup():
+            for name, module in saved_modules.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+            if saved_load_config is None:
+                delattr(sys.modules["gateway.config"], "load_gateway_config")
+            else:
+                sys.modules["gateway.config"].load_gateway_config = saved_load_config
+
+        self.addCleanup(cleanup)
+
+        from gateway.config import Platform
+
+        class Config:
+            platforms = {Platform("slack"): SimpleNamespace(enabled=True, token="token", extra={})}
+
+            def get_home_channel(self, platform):
+                return home
+
+        def default_parse(platform_name, target_ref):
+            if target_ref.startswith("C"):
+                return target_ref, None, True
+            if "/" in target_ref:
+                chat_id, thread_id = target_ref.split("/", 1)
+                return chat_id, thread_id, True
+            return None, None, False
+
+        async def fake_send_to_platform(platform, pconfig, chat_id, content, *, thread_id=None, media_files=None):
+            calls.append(
+                {
+                    "platform": platform,
+                    "chat_id": chat_id,
+                    "content": content,
+                    "thread_id": thread_id,
+                    "media_files": media_files,
+                }
+            )
+            return {"error": send_error} if send_error else {"ok": True}
+
+        sys.modules["gateway.config"].load_gateway_config = lambda: Config()
+        send_mod = types.ModuleType("tools.send_message_tool")
+        send_mod._parse_target_ref = parse or default_parse
+        send_mod._send_to_platform = fake_send_to_platform
+        sys.modules["tools.send_message_tool"] = send_mod
+        directory_mod = types.ModuleType("gateway.channel_directory")
+        directory_mod.resolve_channel_name = resolve or (lambda platform_name, target_ref: None)
+        sys.modules["gateway.channel_directory"] = directory_mod
+        return calls
+
     def test_event_matches_exact_glob_and_operator_values(self):
         event = {
             "event_type": "state_changed",
@@ -291,6 +352,101 @@ class AdapterTest(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertNotIn("door-events", ha._response_by_chat_id)
+
+    def test_delivery_response_uses_hermes_delivery_sink(self):
+        calls = []
+        original = adapter._deliver_to_platform
+
+        async def fake_deliver(target, content, **kwargs):
+            calls.append((target, content, kwargs))
+
+        adapter._deliver_to_platform = fake_deliver
+        try:
+            result = asyncio.run(
+                adapter.HomeAssistantAgentAdapter(
+                    SimpleNamespace(token="token", extra={"response": {"type": "none"}})
+                )._deliver_response(
+                    {"type": "delivery", "target": "slack:#home-alerts"},
+                    "hello",
+                )
+            )
+        finally:
+            adapter._deliver_to_platform = original
+
+        self.assertIsNone(result)
+        self.assertEqual(calls[0][0:2], ("slack:#home-alerts", "hello"))
+        self.assertIn("adapters", calls[0][2])
+
+    def test_send_keeps_delivery_response_on_failure(self):
+        original = adapter._deliver_to_platform
+
+        async def fake_deliver(target, content, **kwargs):
+            raise RuntimeError("boom")
+
+        adapter._deliver_to_platform = fake_deliver
+        try:
+            ha = adapter.HomeAssistantAgentAdapter(
+                SimpleNamespace(token="token", extra={"response": {"type": "none"}})
+            )
+            ha._response_by_chat_id["door-events"] = {"type": "delivery", "target": "slack"}
+            result = asyncio.run(ha.send("door-events", "hello"))
+        finally:
+            adapter._deliver_to_platform = original
+
+        self.assertFalse(result.success)
+        self.assertIn("door-events", ha._response_by_chat_id)
+
+    def test_delivery_sink_uses_home_thread_id_for_bare_target(self):
+        calls = self.install_delivery_stubs(home=SimpleNamespace(chat_id="C_HOME", thread_id="T_HOME"))
+
+        asyncio.run(adapter._deliver_to_platform("slack", "hello"))
+
+        self.assertEqual(calls[0]["chat_id"], "C_HOME")
+        self.assertEqual(calls[0]["thread_id"], "T_HOME")
+
+    def test_delivery_sink_resolves_channel_name_when_available(self):
+        calls = self.install_delivery_stubs(
+            home=None,
+            resolve=lambda platform_name, target_ref: "C0123456789" if target_ref == "#home-alerts" else None,
+        )
+
+        asyncio.run(adapter._deliver_to_platform("slack:#home-alerts", "hello"))
+
+        self.assertEqual(calls[0]["chat_id"], "C0123456789")
+
+    def test_delivery_sink_keeps_raw_target_when_name_is_unresolved(self):
+        calls = self.install_delivery_stubs(home=None)
+
+        asyncio.run(adapter._deliver_to_platform("slack:opaque-target", "hello"))
+
+        self.assertEqual(calls[0]["chat_id"], "opaque-target")
+
+    def test_delivery_sink_prefers_live_adapter(self):
+        self.install_delivery_stubs(home=SimpleNamespace(chat_id="C_HOME", thread_id="T_HOME"), send_error="fallback used")
+
+        class RuntimeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def send(self, chat_id, content, metadata=None):
+                self.calls.append((chat_id, content, metadata))
+                return SimpleNamespace(success=True)
+
+        async def run_delivery():
+            from gateway.config import Platform
+
+            runtime_adapter = RuntimeAdapter()
+            await adapter._deliver_to_platform(
+                "slack",
+                "hello",
+                adapters={Platform("slack"): runtime_adapter},
+                loop=asyncio.get_running_loop(),
+            )
+            return runtime_adapter.calls
+
+        calls = asyncio.run(run_delivery())
+
+        self.assertEqual(calls, [("C_HOME", "hello", {"thread_id": "T_HOME"})])
 
     def test_service_sink_uses_core_ha_guardrails(self):
         self.assertFalse(adapter._SERVICE_NAME_RE.match("Light"))
