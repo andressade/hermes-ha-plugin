@@ -10,7 +10,13 @@ such as Slack.
 
 ## Install
 
-Copy this directory to:
+Install from GitHub:
+
+```bash
+hermes plugins install andressade/hermes-ha-plugin --enable
+```
+
+Or copy this directory manually to:
 
 ```bash
 ~/.hermes/plugins/hermes-ha-plugin
@@ -24,36 +30,35 @@ plugins:
     - hermes-ha-plugin
 ```
 
-Configure the platform:
+Configure the platform in `~/.hermes/config.yaml`:
 
 ```yaml
-gateway:
-  platforms:
-    homeassistant:
-      enabled: true
-      extra:
-        url: "http://homeassistant.local:8123"
-        listen_events:
-          - state_changed
-        response:
-          type: none
-        triggers:
-          - name: front-door-opened
-            event_type: state_changed
-            cooldown_seconds: 120
-            match:
-              data.entity_id: binary_sensor.front_door
-              data.new_state.state: "on"
-            prompt: |
-              Front door opened.
-              Entity: {event.data.entity_id}
-              Full HA event JSON: {json}
+platforms:
+  homeassistant:
+    enabled: true
+    extra:
+      url: "http://homeassistant.local:8123"
+      listen_events:
+        - state_changed
+      response:
+        type: none
+      triggers:
+        - name: front-door-opened
+          event_type: state_changed
+          cooldown_seconds: 120
+          match:
+            data.entity_id: binary_sensor.front_door
+            data.new_state.state: "on"
+          prompt: |
+            Front door opened.
+            Entity: {event.data.entity_id}
+            Full HA event JSON: {json}
 
-              Check whether this looks suspicious. If needed, use HA tools.
-              Send a short summary to Slack.
-            response:
-              type: delivery
-              target: slack:#home-alerts
+            Check whether this looks suspicious. If needed, use HA tools.
+            Send a short summary to Slack.
+          response:
+            type: delivery
+            target: slack:#home-alerts
 ```
 
 By default each matched HA event gets its own Hermes session key so bursts do
