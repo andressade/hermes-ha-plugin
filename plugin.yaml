@@ -1,0 +1,12 @@
+name: hermes-ha-plugin
+kind: platform
+version: 0.1.0
+description: >
+  Home Assistant event bridge for Hermes Agent with configurable event
+  triggers, prompts, HA service tools, and response sinks.
+author: Andres Sade
+requires_env:
+  - HASS_TOKEN
+provides_tools:
+  - ha_list_events
+  - ha_recent_events
