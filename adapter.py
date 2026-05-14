@@ -53,6 +53,11 @@ MAX_RECENT_EVENTS = 200
 RECENT_EVENTS: deque[dict[str, Any]] = deque(maxlen=MAX_RECENT_EVENTS)
 LAST_SETTINGS: dict[str, str] = {}
 _AUTH_ERROR_STATUSES = {401, 403}
+_MATCH_PATHS = {
+    "entity_id": "data.entity_id",
+    "to": "data.new_state.state",
+    "from": "data.old_state.state",
+}
 
 
 class HomeAssistantAuthError(RuntimeError):
@@ -126,7 +131,10 @@ def event_matches(event: dict[str, Any], trigger: dict[str, Any]) -> bool:
     if event_type and event.get("event_type") != event_type:
         return False
     for path, expected in (trigger.get("match") or {}).items():
-        if not _match_value(_get_path(event, str(path)), expected):
+        event_path = _MATCH_PATHS.get(str(path))
+        if event_path is None:
+            return False
+        if not _match_value(_get_path(event, event_path), expected):
             return False
     return True
 

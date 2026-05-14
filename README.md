@@ -48,8 +48,8 @@ platforms:
           event_type: state_changed
           cooldown_seconds: 120
           match:
-            data.entity_id: binary_sensor.front_door
-            data.new_state.state: "on"
+            entity_id: binary_sensor.front_door
+            to: "on"
           prompt: |
             Front door opened.
             Entity: {event.data.entity_id}
@@ -90,18 +90,21 @@ triggers:
     event_type: state_changed
     cooldown_seconds: 60
     match:
-      data.entity_id: "binary_sensor.*_motion"
-      data.new_state.state:
-        in: ["on", "detected"]
-      data.old_state.state:
+      entity_id:
+        - binary_sensor.kitchen_motion
+        - binary_sensor.hall_motion
+      to: "on"
+      from:
         not_equals: "on"
     prompt: "Motion event: {json}"
 ```
 
 Match operators:
 
-- scalar value: exact match
-- string with `*`, `?`, or `[]`: glob match
+- `entity_id`: matches `event.data.entity_id`
+- `to`: matches `event.data.new_state.state`
+- `from`: matches `event.data.old_state.state`
+- scalar value: exact match; strings with `*`, `?`, or `[]` are glob matches
 - list: actual value must be in the list
 - `equals`, `not_equals`, `in`, `exists`, `regex`, `glob`
 

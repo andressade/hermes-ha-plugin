@@ -164,14 +164,53 @@ class AdapterTest(unittest.TestCase):
         trigger = {
             "event_type": "state_changed",
             "match": {
-                "data.entity_id": "binary_sensor.*",
-                "data.new_state.state": {"in": ["on", "detected"]},
-                "data.old_state.state": {"not_equals": "on"},
-                "data.missing": {"exists": False},
+                "entity_id": "binary_sensor.*",
+                "to": {"in": ["on", "detected"]},
+                "from": {"not_equals": "on"},
             },
         }
 
         self.assertTrue(adapter.event_matches(event, trigger))
+
+    def test_event_matches_entity_list_as_or(self):
+        event = {
+            "event_type": "state_changed",
+            "data": {
+                "entity_id": "binary_sensor.kaamera2_person_occupancy",
+                "new_state": {"state": "on"},
+            },
+        }
+        trigger = {
+            "event_type": "state_changed",
+            "match": {
+                "entity_id": [
+                    "binary_sensor.kaamera1_person_occupancy",
+                    "binary_sensor.kaamera2_person_occupancy",
+                    "binary_sensor.kaamera3_person_occupancy",
+                ],
+                "to": "on",
+            },
+        }
+
+        self.assertTrue(adapter.event_matches(event, trigger))
+
+    def test_event_match_rejects_legacy_path_keys(self):
+        event = {
+            "event_type": "state_changed",
+            "data": {
+                "entity_id": "binary_sensor.front_door",
+                "new_state": {"state": "on"},
+            },
+        }
+        trigger = {
+            "event_type": "state_changed",
+            "match": {
+                "data.entity_id": "binary_sensor.front_door",
+                "data.new_state.state": "on",
+            },
+        }
+
+        self.assertFalse(adapter.event_matches(event, trigger))
 
     def test_event_match_rejects_wrong_event_type(self):
         event = {"event_type": "call_service", "data": {"domain": "light"}}
@@ -278,7 +317,7 @@ class AdapterTest(unittest.TestCase):
                     {
                         "name": "door",
                         "event_type": "state_changed",
-                        "match": {"data.entity_id": "binary_sensor.front_door"},
+                        "match": {"entity_id": "binary_sensor.front_door"},
                         "prompt": "Door: {event.data.entity_id}",
                         "response": {"type": "webhook", "url": "http://example.invalid"},
                     }
