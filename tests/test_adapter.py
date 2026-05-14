@@ -238,11 +238,11 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(ctx.platforms[0]["name"], "homeassistant")
         self.assertEqual(
             {tool[0] for tool in ctx.tools},
-            {"ha_list_events", "ha_recent_events"},
+            {"ha_list_events", "ha_recent_events", "ha_fetch_media"},
         )
 
     def test_tool_schemas_are_raw_hermes_schema_shape(self):
-        for schema in (adapter.LIST_EVENTS_SCHEMA, adapter.RECENT_EVENTS_SCHEMA):
+        for schema in (adapter.LIST_EVENTS_SCHEMA, adapter.RECENT_EVENTS_SCHEMA, adapter.FETCH_MEDIA_SCHEMA):
             self.assertIn("name", schema)
             self.assertIn("description", schema)
             self.assertIn("parameters", schema)

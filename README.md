@@ -178,9 +178,22 @@ The plugin adds:
 
 - `ha_list_events`: list HA event bus event types
 - `ha_recent_events`: inspect recent events seen by this plugin process
+- `ha_fetch_media`: fetch HA-hosted camera/image media with HA authentication
+  and save it as a local file for `vision_analyze`
 
 Hermes Agent's built-in Home Assistant tools remain responsible for state reads
 and service calls, including their existing validation and service guardrails.
+The plugin synchronizes its configured HA URL/token into those built-in tools at
+startup, so event prompts and HA tools use the same Home Assistant instance.
+
+For camera/image analysis, prefer:
+
+```text
+Use ha_get_state for image.kaamera1_person.
+Then use ha_fetch_media with entity_id=image.kaamera1_person.
+Analyze the returned local path with vision_analyze.
+Do not open Home Assistant URLs directly in browser_navigate.
+```
 
 ## Notes
 

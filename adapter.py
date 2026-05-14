@@ -27,17 +27,21 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 
 try:
     from .schemas import (
+        FETCH_MEDIA_SCHEMA,
         LIST_EVENTS_SCHEMA,
         RECENT_EVENTS_SCHEMA,
     )
+    from .media import fetch_media as _fetch_media
     from .sinks import deliver_to_platform as _deliver_to_platform
     from .sinks import post_webhook as _post_webhook
     from .sinks import render_payload as _render_payload
 except ImportError:
     from schemas import (
+        FETCH_MEDIA_SCHEMA,
         LIST_EVENTS_SCHEMA,
         RECENT_EVENTS_SCHEMA,
     )
+    from media import fetch_media as _fetch_media
     from sinks import deliver_to_platform as _deliver_to_platform
     from sinks import post_webhook as _post_webhook
     from sinks import render_payload as _render_payload
@@ -48,6 +52,11 @@ DEFAULT_URL = "http://homeassistant.local:8123"
 MAX_RECENT_EVENTS = 200
 RECENT_EVENTS: deque[dict[str, Any]] = deque(maxlen=MAX_RECENT_EVENTS)
 LAST_SETTINGS: dict[str, str] = {}
+_AUTH_ERROR_STATUSES = {401, 403}
+
+
+class HomeAssistantAuthError(RuntimeError):
+    """Home Assistant rejected authentication; retrying can trigger IP bans."""
 
 
 def check_requirements() -> bool:
@@ -200,6 +209,11 @@ async def ha_recent_events(args: dict[str, Any], **_: Any) -> str:
     return json.dumps(events[:limit], ensure_ascii=False)
 
 
+async def ha_fetch_media(args: dict[str, Any], **_: Any) -> str:
+    url, token = _ha_settings()
+    return await _fetch_media(args, base_url=url, token=token)
+
+
 class HomeAssistantAgentAdapter(BasePlatformAdapter):
     MAX_MESSAGE_LENGTH = 8192
     _BACKOFF_STEPS = [5, 10, 30, 60]
@@ -209,6 +223,7 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
         extra = _extra(config)
         self._hass_url, self._hass_token = _ha_settings(config)
         LAST_SETTINGS.update({"url": self._hass_url, "token": self._hass_token})
+        self._sync_ha_tool_settings()
         self._triggers = list(extra.get("triggers") or [])
         self._listen_events = sorted({str(t.get("event_type")) for t in self._triggers if t.get("event_type")})
         self._listen_events += [e for e in extra.get("listen_events", []) if e not in self._listen_events]
@@ -228,6 +243,29 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
         self._msg_id += 1
         return self._msg_id
 
+    def _sync_ha_tool_settings(self) -> None:
+        os.environ["HASS_URL"] = self._hass_url
+        if self._hass_token:
+            os.environ["HASS_TOKEN"] = self._hass_token
+        try:
+            from tools import homeassistant_tool
+            from tools.registry import invalidate_check_fn_cache
+
+            homeassistant_tool._HASS_URL = self._hass_url
+            homeassistant_tool._HASS_TOKEN = self._hass_token
+            invalidate_check_fn_cache()
+        except Exception:
+            logger.debug("[%s] Could not sync built-in HA tool settings", self.name, exc_info=True)
+
+    def _mark_auth_fatal(self, exc: BaseException) -> str:
+        message = (
+            f"Home Assistant authentication rejected: {exc}. "
+            "Hermes will stop reconnecting to avoid HA IP bans. "
+            "Check HASS_TOKEN or HA auth, and remove the host from HA ip_bans.yaml before restarting."
+        )
+        self._set_fatal_error("homeassistant_auth_rejected", message, retryable=False)
+        return message
+
     async def connect(self) -> bool:
         if not AIOHTTP_AVAILABLE:
             logger.warning("[%s] aiohttp not installed. Install hermes-agent[homeassistant].", self.name)
@@ -243,6 +281,10 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
             self._mark_connected()
             logger.info("[%s] Connected to %s", self.name, self._hass_url)
             return True
+        except HomeAssistantAuthError as exc:
+            logger.error("[%s] Failed to connect: %s", self.name, self._mark_auth_fatal(exc))
+            await self._cleanup_ws()
+            return False
         except Exception as exc:
             logger.error("[%s] Failed to connect: %s", self.name, exc)
             await self._cleanup_ws()
@@ -251,12 +293,22 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
     async def _connect_ws(self) -> None:
         ws_url = self._hass_url.replace("https://", "wss://").replace("http://", "ws://") + "/api/websocket"
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        self._ws = await self._session.ws_connect(ws_url, heartbeat=30, timeout=30)
+        try:
+            self._ws = await self._session.ws_connect(ws_url, heartbeat=30, timeout=30)
+        except Exception as exc:
+            status = getattr(exc, "status", None)
+            if status in _AUTH_ERROR_STATUSES:
+                raise HomeAssistantAuthError(f"HTTP {status} from {ws_url}") from exc
+            raise
         msg = await self._ws.receive_json()
+        if msg.get("type") == "auth_invalid":
+            raise HomeAssistantAuthError(msg.get("message") or msg)
         if msg.get("type") != "auth_required":
             raise RuntimeError(f"Expected auth_required, got {msg.get('type')}")
         await self._ws.send_json({"type": "auth", "access_token": self._hass_token})
         msg = await self._ws.receive_json()
+        if msg.get("type") == "auth_invalid":
+            raise HomeAssistantAuthError(msg.get("message") or msg)
         if msg.get("type") != "auth_ok":
             raise RuntimeError(f"HA auth failed: {msg}")
         event_types = self._listen_events or [None]
@@ -317,6 +369,11 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
                 await self._cleanup_ws()
                 await self._connect_ws()
                 backoff_idx = 0
+            except HomeAssistantAuthError as exc:
+                logger.error("[%s] Reconnect stopped: %s", self.name, self._mark_auth_fatal(exc))
+                await self._cleanup_ws()
+                await self._notify_fatal_error()
+                return
             except Exception as exc:
                 logger.warning("[%s] Reconnect failed: %s", self.name, exc)
 
@@ -467,7 +524,8 @@ def register(ctx: Any) -> None:
         platform_hint=(
             "You were triggered by a Home Assistant event. Follow the configured prompt. "
             "Use the built-in Home Assistant tools for service/state access, "
-            "and ha_list_events or ha_recent_events for event-bus context."
+            "ha_list_events or ha_recent_events for event-bus context, and ha_fetch_media "
+            "when you need Home Assistant camera/image media."
         ),
     )
     _register_tools(ctx)
@@ -481,4 +539,8 @@ def _register_tools(ctx: Any) -> None:
     ctx.register_tool(
         "ha_recent_events", "homeassistant", RECENT_EVENTS_SCHEMA, ha_recent_events,
         lambda: True, [], True, "Read recent HA events seen by this plugin.", "HA",
+    )
+    ctx.register_tool(
+        "ha_fetch_media", "homeassistant", FETCH_MEDIA_SCHEMA, ha_fetch_media,
+        check_tool_requirements, ["HASS_TOKEN"], True, "Fetch HA media to a local file.", "HA",
     )
