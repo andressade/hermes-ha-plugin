@@ -140,16 +140,31 @@ def event_matches(event: dict[str, Any], trigger: dict[str, Any]) -> bool:
 
 
 def render_template(template: str, event: dict[str, Any], trigger: dict[str, Any]) -> str:
+    def apply_filters(value: str, filters: list[str]) -> str:
+        for item in filters:
+            name, _, args = item.partition(":")
+            if name.strip() != "replace" or not args:
+                continue
+            if ":" not in args:
+                continue
+            old, new = args.split(":", 1)
+            if not old:
+                continue
+            value = value.replace(old, new)
+        return value
+
     def replace(match: re.Match[str]) -> str:
-        key = match.group(1).strip()
+        parts = [part.strip() for part in match.group(1).split("|")]
+        key = parts[0]
+        filters = parts[1:]
         if key == "json":
-            return json.dumps(event, ensure_ascii=False, sort_keys=True)
+            return apply_filters(json.dumps(event, ensure_ascii=False, sort_keys=True), filters)
         if key.startswith("event."):
             value = _get_path(event, key[6:])
-            return "" if value is None else str(value)
+            return apply_filters("" if value is None else str(value), filters)
         if key.startswith("trigger."):
             value = _get_path(trigger, key[8:])
-            return "" if value is None else str(value)
+            return apply_filters("" if value is None else str(value), filters)
         return match.group(0)
 
     return re.sub(r"\{([^{}]+)\}", replace, str(template or ""))

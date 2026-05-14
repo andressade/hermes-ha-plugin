@@ -116,6 +116,17 @@ Template fields:
 - `{event.data.new_state.state}`
 - `{trigger.name}`
 
+Trigger prompt template fields also support a simple `replace` filter chain:
+
+```text
+{event.data.entity_id|replace:binary_sensor.:image.|replace:_occupancy:}
+```
+
+For example, this turns `binary_sensor.kaamera1_person_occupancy` into
+`image.kaamera1_person`. Filter syntax is intentionally simple: `|` separates
+filters and `:` separates `replace` arguments, so those delimiters are not
+escaped inside replacement values.
+
 ## Response Sinks
 
 Ignore the final agent response:

@@ -231,6 +231,31 @@ class AdapterTest(unittest.TestCase):
         self.assertTrue(text.startswith("office|state_changed|sensor.office|"))
         self.assertEqual(json.loads(text.split("|", 3)[-1]), event)
 
+    def test_render_template_supports_replace_filter_chain(self):
+        event = {
+            "event_type": "state_changed",
+            "data": {"entity_id": "binary_sensor.kaamera1_person_occupancy"},
+        }
+
+        text = adapter.render_template(
+            "{event.data.entity_id|replace:binary_sensor.:image.|replace:_occupancy:}",
+            event,
+            {},
+        )
+
+        self.assertEqual(text, "image.kaamera1_person")
+
+    def test_render_template_ignores_malformed_filters(self):
+        event = {"event_type": "state_changed", "data": {"entity_id": "sensor.office"}}
+
+        text = adapter.render_template(
+            "{event.data.entity_id|unknown:x:y|replace:|replace::bad}",
+            event,
+            {},
+        )
+
+        self.assertEqual(text, "sensor.office")
+
     def test_adapter_uses_trigger_response_by_chat_id(self):
         config = SimpleNamespace(
             token="token",
