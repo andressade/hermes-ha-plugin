@@ -353,6 +353,71 @@ class AdapterTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertNotIn("door-events", ha._response_by_chat_id)
 
+    def test_no_response_keyword_suppresses_delivery(self):
+        original = adapter._deliver_to_platform
+        calls = []
+
+        async def fake_deliver(target, content, **kwargs):
+            calls.append((target, content))
+
+        adapter._deliver_to_platform = fake_deliver
+        try:
+            ha = adapter.HomeAssistantAgentAdapter(
+                SimpleNamespace(token="token", extra={"response": {"type": "none"}})
+            )
+            ha._response_by_chat_id["door-events"] = {"type": "delivery", "target": "slack"}
+            result = asyncio.run(ha.send("door-events", "Nothing to report. NO_RESP"))
+        finally:
+            adapter._deliver_to_platform = original
+
+        self.assertTrue(result.success)
+        self.assertEqual(calls, [])
+        self.assertNotIn("door-events", ha._response_by_chat_id)
+
+    def test_no_response_keyword_can_be_overridden_per_response(self):
+        original = adapter._deliver_to_platform
+        calls = []
+
+        async def fake_deliver(target, content, **kwargs):
+            calls.append((target, content))
+
+        adapter._deliver_to_platform = fake_deliver
+        try:
+            ha = adapter.HomeAssistantAgentAdapter(
+                SimpleNamespace(token="token", extra={"no_response_keyword": "GLOBAL_SKIP"})
+            )
+            ha._response_by_chat_id["door-events"] = {
+                "type": "delivery",
+                "target": "slack",
+                "no_response_keyword": "SKIP_ALERT",
+            }
+            result = asyncio.run(ha.send("door-events", "SKIP_ALERT"))
+        finally:
+            adapter._deliver_to_platform = original
+
+        self.assertTrue(result.success)
+        self.assertEqual(calls, [])
+
+    def test_no_response_keyword_false_disables_suppression(self):
+        original = adapter._deliver_to_platform
+        calls = []
+
+        async def fake_deliver(target, content, **kwargs):
+            calls.append((target, content))
+
+        adapter._deliver_to_platform = fake_deliver
+        try:
+            ha = adapter.HomeAssistantAgentAdapter(
+                SimpleNamespace(token="token", extra={"no_response_keyword": False})
+            )
+            ha._response_by_chat_id["door-events"] = {"type": "delivery", "target": "slack"}
+            result = asyncio.run(ha.send("door-events", "NO_RESP"))
+        finally:
+            adapter._deliver_to_platform = original
+
+        self.assertTrue(result.success)
+        self.assertEqual(calls, [("slack", "NO_RESP")])
+
     def test_delivery_response_uses_hermes_delivery_sink(self):
         calls = []
         original = adapter._deliver_to_platform

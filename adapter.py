@@ -228,6 +228,7 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
         self._listen_events = sorted({str(t.get("event_type")) for t in self._triggers if t.get("event_type")})
         self._listen_events += [e for e in extra.get("listen_events", []) if e not in self._listen_events]
         self._default_response = extra.get("response") or {"type": "none"}
+        self._no_response_keyword = self._normalize_no_response_keyword(extra.get("no_response_keyword", "NO_RESP"))
         self._response_by_chat_id: dict[str, dict[str, Any]] = {}
         self._session = None
         self._ws = None
@@ -448,11 +449,27 @@ class HomeAssistantAgentAdapter(BasePlatformAdapter):
         if isinstance(trigger_response, dict):
             response.update(trigger_response)
         try:
+            if self._should_suppress_response(response, content):
+                logger.info("[%s] Response suppressed by no-response keyword for %s", self.name, chat_key)
+                self._response_by_chat_id.pop(chat_key, None)
+                return SendResult(success=True, message_id=uuid.uuid4().hex[:12])
             await self._deliver_response(response, content)
             self._response_by_chat_id.pop(chat_key, None)
             return SendResult(success=True, message_id=uuid.uuid4().hex[:12])
         except Exception as exc:
             return SendResult(success=False, error=str(exc))
+
+    def _should_suppress_response(self, response: dict[str, Any], content: str) -> bool:
+        keyword = self._normalize_no_response_keyword(
+            response.get("no_response_keyword", self._no_response_keyword)
+        )
+        return bool(keyword and keyword in str(content or ""))
+
+    @staticmethod
+    def _normalize_no_response_keyword(value: Any) -> str:
+        if value is None or value is False:
+            return ""
+        return str(value).strip()
 
     async def _deliver_response(self, response: dict[str, Any], content: str) -> None:
         sink_type = str(response.get("type") or "none")

@@ -42,6 +42,7 @@ platforms:
         - state_changed
       response:
         type: none
+      no_response_keyword: NO_RESP
       triggers:
         - name: front-door-opened
           event_type: state_changed
@@ -55,7 +56,7 @@ platforms:
             Full HA event JSON: {json}
 
             Check whether this looks suspicious. If needed, use HA tools.
-            Send a short summary to Slack.
+            Send a short summary to Slack. If no alert is needed, reply exactly NO_RESP.
           response:
             type: delivery
             target: slack:#home-alerts
@@ -169,6 +170,27 @@ response:
 
 Trigger-level `response` overrides platform-level `response` for that dispatched
 event.
+
+Suppressing delivery from the prompt:
+
+```yaml
+extra:
+  no_response_keyword: NO_RESP
+  triggers:
+    - name: camera-person
+      prompt: |
+        Decide whether this needs an alert.
+        If no alert is needed, reply exactly NO_RESP.
+      response:
+        type: delivery
+        target: slack:#home-alerts
+```
+
+If the final agent response contains the configured keyword, the plugin treats
+the send as successful and does not deliver anything to the response sink. The
+default keyword is `NO_RESP`; set `no_response_keyword: false` globally or in a
+trigger `response` block to disable suppression, or set a different keyword per
+response.
 
 ## Tools
 
